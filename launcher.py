@@ -20,8 +20,9 @@ else:
     BASE_DIR = os.path.dirname(__file__)
     APP_DIR  = BASE_DIR
 
-SETTINGS_FILE = os.path.join(APP_DIR,  "settings.json")
-BRAND_FILE    = os.path.join(BASE_DIR, "brand.json")
+SETTINGS_FILE  = os.path.join(APP_DIR,  "settings.json")
+PROFILES_FILE  = os.path.join(APP_DIR,  "profiles.json")
+BRAND_FILE     = os.path.join(BASE_DIR, "brand.json")
 
 # ── Лог-файл ────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -92,6 +93,8 @@ def _default_mc_dir() -> str:
 
 
 import gtnh_launch
+import profiles as prof_mod
+from profiles import Profile, ProfileManager
 
 
 # ── API-запросы ───────────────────────────────────────────────────────────────
@@ -135,30 +138,40 @@ def _save_client_version(game_dir: str, ver: str):
 
 # ══════════════════════════════════════════════════════════════════════════════
 class Settings:
+    """Глобальные настройки (не зависящие от профиля)."""
     _defaults = {
-        "java_path":    "",
-        "max_memory":   BRAND["default_memory"],
-        "game_dir":     _default_mc_dir(),
-        "remember_me":  False,
-        "saved_login":  "",
-        "saved_token":  "",   # API-токен сессии (не пароль!)
+        "java_path":   "",           # глобальный путь к Java (override профиля)
+        "remember_me": False,
+        "saved_login": "",
+        "saved_token": "",           # API-токен сессии (не пароль!)
+        # Поля ниже — только для миграции из старых settings.json:
+        # "max_memory" и "game_dir" переезжают в profiles.json
     }
 
     def __init__(self):
         self.data = dict(self._defaults)
+        self._migrated_game_dir   = ""
+        self._migrated_memory     = BRAND["default_memory"]
+
         if os.path.exists(SETTINGS_FILE):
             try:
                 with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                     loaded = json.load(f)
-                # Миграция: убираем старый saved_password (хранился в base64)
                 loaded.pop("saved_password", None)
+                # Запоминаем старые поля для последующей миграции в профиль
+                self._migrated_game_dir = loaded.pop("game_dir", "")
+                self._migrated_memory   = str(loaded.pop("max_memory",
+                                                          BRAND["default_memory"]))
                 self.data.update(loaded)
             except Exception:
                 pass
 
     def save(self):
+        # Сохраняем только глобальные поля (без game_dir / max_memory)
+        out = {k: v for k, v in self.data.items()
+               if k in self._defaults}
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, ensure_ascii=False, indent=2)
+            json.dump(out, f, ensure_ascii=False, indent=2)
 
     def get(self, k, default=None):
         return self.data.get(k, self._defaults.get(k, default))
@@ -178,6 +191,14 @@ class MinecraftLauncher:
         self._user = None        # dict после успешного входа
         self._busy = False
 
+        # ── Профили ───────────────────────────────────────────────────────────
+        # Если profiles.json ещё нет — создаём с данными из старого settings.json
+        self.pm = ProfileManager(
+            PROFILES_FILE,
+            fallback_game_dir=self.cfg._migrated_game_dir or _default_mc_dir(),
+        )
+        self._migrate_settings_to_profile()
+
         self.root = tk.Tk()
         self.root.title(BRAND["launcher_title"])
         self.root.resizable(False, False)
@@ -192,6 +213,27 @@ class MinecraftLauncher:
 
         self._apply_style()
         self._show_login()
+
+    # ── Миграция старых настроек → первый профиль ─────────────────────────────
+
+    def _migrate_settings_to_profile(self):
+        """
+        Если profiles.json создан впервые (из fallback) и в старом settings.json
+        были game_dir / max_memory — переносим их в профиль по умолчанию.
+        Запускается один раз; при следующем старте profiles.json уже существует.
+        """
+        if os.path.isfile(PROFILES_FILE):
+            return   # файл уже существует — миграция не нужна
+
+        p = self.pm.selected
+        if self.cfg._migrated_game_dir:
+            p.game_dir = self.cfg._migrated_game_dir
+        if self.cfg._migrated_memory:
+            try:
+                p.memory_mb = int(self.cfg._migrated_memory)
+            except ValueError:
+                pass
+        self.pm.save()
 
     # ── Общий стиль ttk ───────────────────────────────────────────────────────
 
@@ -398,18 +440,46 @@ class MinecraftLauncher:
         left.pack(side="left", fill="y")
         left.pack_propagate(False)
 
-        # Память
+        # ── Блок профилей ─────────────────────────────────────────────────
+        tk.Label(left, text="Профиль", bg=DARK, fg=TEXT,
+                 font=("Segoe UI", 10)).pack(anchor="w")
+
+        pf = tk.Frame(left, bg=DARK)
+        pf.pack(anchor="w", pady=(3, 4), fill="x")
+
+        self.profile_var = tk.StringVar(value=self.pm.selected_name)
+        self.profile_cb  = ttk.Combobox(
+            pf, textvariable=self.profile_var,
+            values=self.pm.names,
+            state="readonly", width=15,
+            font=("Segoe UI", 10),
+        )
+        self.profile_cb.pack(side="left")
+        self.profile_cb.bind("<<ComboboxSelected>>", self._on_profile_change)
+
+        self._sbtn(pf, "✚", self._on_profile_new).pack(side="left", padx=(4, 1))
+        self._sbtn(pf, "✎", self._on_profile_edit).pack(side="left", padx=1)
+        self._sbtn(pf, "✕", self._on_profile_delete).pack(side="left", padx=1)
+
+        # Подпись профиля (MC-версия, пак, счётчик)
+        self.profile_sub = tk.Label(left, text=self.pm.selected.subtitle(),
+                                     bg=DARK, fg=MUTED,
+                                     font=("Segoe UI", 8), wraplength=220,
+                                     justify="left")
+        self.profile_sub.pack(anchor="w", pady=(0, 12))
+
+        # ── Память ────────────────────────────────────────────────────────
         tk.Label(left, text="Память (МБ)", bg=DARK, fg=TEXT,
                  font=("Segoe UI", 10)).pack(anchor="w")
-        self.memory_var = tk.StringVar(value=self.cfg["max_memory"])
+        self.memory_var = tk.StringVar(value=str(self.pm.selected.memory_mb))
         self._ent(left, self.memory_var, w=14).pack(anchor="w", pady=(3, 14))
 
-        # Папка игры
+        # ── Папка игры ────────────────────────────────────────────────────
         tk.Label(left, text="Папка игры", bg=DARK, fg=TEXT,
                  font=("Segoe UI", 10)).pack(anchor="w")
         gf = tk.Frame(left, bg=DARK)
         gf.pack(anchor="w", pady=(3, 20))
-        self.gamedir_var = tk.StringVar(value=self.cfg["game_dir"])
+        self.gamedir_var = tk.StringVar(value=self.pm.selected.game_dir)
         self._ent(gf, self.gamedir_var, w=16).pack(side="left")
         self._sbtn(gf, "…", self._browse_gamedir).pack(side="left", padx=3)
 
@@ -499,7 +569,7 @@ class MinecraftLauncher:
     # ── Проверка версии клиента ───────────────────────────────────────────────
 
     def _check_client_update(self):
-        game_dir = self.gamedir_var.get() or _default_mc_dir()
+        game_dir = self.gamedir_var.get() or self.pm.selected.game_dir or _default_mc_dir()
         local    = _local_client_version(game_dir)
         try:
             data   = _api_get("/api/client/version", timeout=5)
@@ -611,6 +681,47 @@ class MinecraftLauncher:
         self.dl_pb["value"] = pct
         self.dl_label.config(text=label)
 
+    # ── Обновление только библиотек ───────────────────────────────────────────
+
+    def _on_install_libs(self):
+        """Скачивает/обновляет библиотеки без переустановки всей сборки."""
+        if self._busy:
+            return
+        game_dir = self.gamedir_var.get() or _default_mc_dir()
+        if not gtnh_launch.find_instance_dir(game_dir):
+            messagebox.showerror("Ошибка",
+                                  "Сборка не найдена. Сначала нажмите «Установить».")
+            return
+        threading.Thread(target=self._do_install_libs,
+                          args=(game_dir,), daemon=True).start()
+
+    def _do_install_libs(self, game_dir: str):
+        self._set_busy(True)
+        try:
+            def _on_status(msg):
+                self.root.after(0, self._set_status, msg)
+
+            def _on_progress(done, total_n):
+                if total_n > 0:
+                    pct = min(done * 100 // total_n, 100)
+                    self.root.after(0, self._dl_progress, pct, f"{done}/{total_n}")
+
+            gtnh_launch.install_dependencies(
+                instance_dir=game_dir,
+                shared_dir=game_dir,
+                on_status=_on_status,
+                on_progress=_on_progress,
+                libs_url=LIBS_URL,
+            )
+            self.root.after(0, self._dl_progress, 100, "Готово!")
+            self.root.after(0, self._set_status, "Библиотеки обновлены!")
+        except Exception as e:
+            log.exception("Ошибка обновления библиотек")
+            self.root.after(0, messagebox.showerror, "Ошибка", str(e))
+            self.root.after(0, self._set_status, "Ошибка обновления библиотек")
+        finally:
+            self._set_busy(False)
+
     # ── Запуск игры ───────────────────────────────────────────────────────────
 
     def _on_launch(self):
@@ -626,9 +737,14 @@ class MinecraftLauncher:
                 self._on_install()
             return
 
-        # Сохраняем настройки
-        self.cfg["max_memory"] = self.memory_var.get()
-        self.cfg["game_dir"]   = game_dir
+        # Сохраняем изменения в профиль
+        p = self.pm.selected
+        try:
+            p.memory_mb = int(self.memory_var.get())
+        except ValueError:
+            pass
+        p.game_dir = game_dir
+        self.pm.save()
         self.cfg.save()
 
         threading.Thread(target=self._do_launch,
@@ -689,6 +805,10 @@ class MinecraftLauncher:
 
     def _monitor_game(self, proc: subprocess.Popen):
         """Ждёт завершения игры и показывает ошибку при ненулевом коде."""
+        # Считаем запуск состоявшимся — сразу записываем в профиль
+        self.pm.selected.record_play()
+        self.pm.save()
+
         try:
             out_b, _ = proc.communicate()   # блокируемся до завершения
             ret = proc.returncode
@@ -749,6 +869,152 @@ class MinecraftLauncher:
 
         self._sbtn(bf, "Копировать", _copy).pack(side="left")
         self._btn(bf, "Закрыть", RED, win.destroy).pack(side="right")
+
+    # ══════════ ПРОФИЛИ ═══════════════════════════════════════════════════════
+
+    def _refresh_profile_ui(self):
+        """Синхронизирует комбобокс, поля памяти/папки и подпись с pm.selected."""
+        p = self.pm.selected
+        self.profile_cb.config(values=self.pm.names)
+        self.profile_var.set(p.name)
+        self.memory_var.set(str(p.memory_mb))
+        self.gamedir_var.set(p.game_dir)
+        self.profile_sub.config(text=p.subtitle())
+
+    def _on_profile_change(self, _event=None):
+        """Пользователь выбрал другой профиль из комбобокса."""
+        name = self.profile_var.get()
+        self.pm.select(name)          # select() вызывает save()
+        self._refresh_profile_ui()
+
+    def _on_profile_new(self):
+        """Создать новый профиль."""
+        new_p = Profile({
+            "name":     "Новый профиль",
+            "game_dir": _default_mc_dir(),
+            "memory_mb": int(BRAND["default_memory"]),
+        })
+        result = self._open_profile_dialog(new_p, title="Новый профиль")
+        if result is None:
+            return
+        if not self.pm.add(result):
+            messagebox.showerror("Ошибка", f'Профиль «{result.name}» уже существует.')
+            return
+        self.pm.select(result.name)
+        self.pm.save()
+        self._refresh_profile_ui()
+
+    def _on_profile_edit(self):
+        """Редактировать текущий профиль."""
+        p      = self.pm.selected.copy()
+        old    = p.name
+        result = self._open_profile_dialog(p, title=f"Редактировать: {old}")
+        if result is None:
+            return
+        # Проверяем конфликт имён (кроме самого себя)
+        if result.name != old and result.name in self.pm.names:
+            messagebox.showerror("Ошибка",
+                                  f'Профиль «{result.name}» уже существует.')
+            return
+        self.pm.update(old, result)
+        self.pm.save()
+        self._refresh_profile_ui()
+
+    def _on_profile_delete(self):
+        """Удалить текущий профиль."""
+        name = self.pm.selected_name
+        if len(self.pm.names) <= 1:
+            messagebox.showinfo("Нельзя удалить", "Должен оставаться хотя бы один профиль.")
+            return
+        if not messagebox.askyesno("Удалить профиль",
+                                    f'Удалить профиль «{name}»?\nЭто не удалит файлы игры.'):
+            return
+        self.pm.delete(name)
+        self.pm.save()
+        self._refresh_profile_ui()
+
+    def _open_profile_dialog(self, p: Profile, title: str) -> "Profile | None":
+        """
+        Модальный диалог редактирования профиля.
+        Возвращает изменённый Profile или None если пользователь нажал Отмена.
+        """
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.geometry("420x380")
+        win.configure(bg=DARK)
+        win.resizable(False, False)
+        win.grab_set()
+
+        result_holder: list[Profile] = []   # [0] = Profile если OK
+
+        # ── Поля ──────────────────────────────────────────────────────────
+        fields: list[tuple[str, tk.StringVar, str]] = []
+
+        def row(label: str, value: str, hint: str = "") -> tk.StringVar:
+            tk.Label(win, text=label, bg=DARK, fg=TEXT,
+                     font=("Segoe UI", 10)).pack(anchor="w", padx=18, pady=(10, 0))
+            var = tk.StringVar(value=value)
+            ent = self._ent(win, var, w=38)
+            ent.pack(anchor="w", padx=18, pady=(2, 0))
+            if hint:
+                tk.Label(win, text=hint, bg=DARK, fg=MUTED,
+                         font=("Segoe UI", 8)).pack(anchor="w", padx=18)
+            fields.append((label, var, hint))
+            return var
+
+        v_name    = row("Название",      p.name)
+        v_dir     = row("Папка игры",    p.game_dir,    "Папка с mmc-pack.json")
+        v_memory  = row("Память (МБ)",   str(p.memory_mb), "Рекомендуется 4096–8192")
+        v_java    = row("Java (путь)",   p.java_path,   "Оставьте пустым для авто-поиска")
+        v_mcver   = row("Версия MC",     p.mc_version)
+        v_packver = row("Версия пака",   p.pack_version)
+
+        # Кнопка «Обзор» для папки игры
+        def _browse():
+            d = filedialog.askdirectory(title="Папка для игры", parent=win)
+            if d:
+                v_dir.set(d)
+
+        br_frame = tk.Frame(win, bg=DARK)
+        br_frame.pack(anchor="w", padx=18, pady=(0, 4))
+        self._sbtn(br_frame, "📂 Обзор", _browse).pack(side="left")
+
+        # ── Кнопки OK / Отмена ────────────────────────────────────────────
+        def _ok():
+            name = v_name.get().strip()
+            if not name:
+                messagebox.showerror("Ошибка", "Название профиля не может быть пустым.", parent=win)
+                return
+            try:
+                mem = int(v_memory.get())
+                if mem < 256:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("Ошибка", "Память должна быть числом ≥ 256.", parent=win)
+                return
+
+            p.name        = name
+            p.game_dir    = v_dir.get().strip()
+            p.memory_mb   = mem
+            p.java_path   = v_java.get().strip()
+            p.mc_version  = v_mcver.get().strip()
+            p.pack_version = v_packver.get().strip()
+            result_holder.append(p)
+            win.destroy()
+
+        def _cancel():
+            win.destroy()
+
+        btn_row = tk.Frame(win, bg=DARK)
+        btn_row.pack(side="bottom", fill="x", padx=18, pady=14)
+        self._btn(btn_row, "Сохранить", ACCENT, _ok, fg=DARK).pack(side="right", padx=(6, 0))
+        self._sbtn(btn_row, "Отмена",   _cancel).pack(side="right")
+
+        win.bind("<Return>", lambda _: _ok())
+        win.bind("<Escape>", lambda _: _cancel())
+        win.wait_window()
+
+        return result_holder[0] if result_holder else None
 
     # ── Сохранение / сброс учётных данных ────────────────────────────────────
 
