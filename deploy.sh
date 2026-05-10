@@ -19,9 +19,12 @@ warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
 error() { echo -e "${RED}[✗]${NC} $*"; exit 1; }
 
 # ── Права ─────────────────────────────────────────────────────────────────────
+SCRIPT_URL="https://raw.githubusercontent.com/WorMythol/launcher-api/master/deploy.sh"
 if [[ $EUID -ne 0 ]]; then
-    warn "Запускаю через sudo..."
-    exec sudo bash "$0" "$@"
+    warn "Требуются права root. Скачиваю и перезапускаю через sudo..."
+    TMPFILE=$(mktemp /tmp/deploy-XXXXXX.sh)
+    curl -fsSL "$SCRIPT_URL" -o "$TMPFILE"
+    exec sudo bash "$TMPFILE" "$@"
 fi
 
 # ── Зависимости ОС ────────────────────────────────────────────────────────────
