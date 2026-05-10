@@ -1,0 +1,16 @@
+[Unit]
+Description=Minecraft Launcher API
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/launcher-api
+ExecStart=/opt/launcher-api/venv/bin/python server.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

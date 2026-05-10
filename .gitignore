@@ -1,0 +1,25 @@
+# Конфиг с паролями — не коммитить!
+brand.json
+settings.json
+launcher.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# IDE
+.idea/
+.vscode/
+
+# Иконки и бинари
+*.ico
+*.exe

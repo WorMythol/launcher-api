@@ -1,0 +1,23 @@
+{
+  "server_name": "My Server",
+  "launcher_title": "My Server Launcher",
+  "launcher_version": "1.0.1",
+
+  "api_url":             "http://YOUR_SERVER_IP:8000",
+  "db_url":              "postgresql://USER:PASSWORD@HOST:PORT/DBNAME",
+  "fixed_version":       "1.20.1-wm2",
+  "client_download_url": "http://YOUR_SERVER_IP:8000/api/downloads/client/latest",
+
+  "color_dark":   "#1a1a2e",
+  "color_panel":  "#16213e",
+  "color_accent": "#00d4aa",
+  "color_red":    "#e94560",
+  "color_input":  "#0f3460",
+  "color_text":   "#e0e0e0",
+  "color_muted":  "#888888",
+
+  "default_memory": "2048",
+
+  "authlib_jar":        "",
+  "authlib_server_url": ""
+}
