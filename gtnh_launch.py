@@ -511,6 +511,18 @@ def build_command(instance_dir: str, shared_dir: str,
     if not classpath:
         raise RuntimeError("Classpath пуст — библиотеки не найдены. Запустите установку.")
 
+    # ── Guava 15.0 должен быть ПЕРВЫМ в classpath ─────────────────────────
+    # AccessTransformer использует CharSource.readLines(LineProcessor), которого
+    # нет в Guava 28+. Если новая Guava окажется раньше — AT сломается и
+    # все поля останутся private → IllegalAccessError при загрузке модов.
+    _guava15  = [p for p in classpath
+                 if "guava" in os.path.basename(p).lower()
+                 and "guava-15" in os.path.basename(p).lower()]
+    _rest     = [p for p in classpath if p not in set(_guava15)]
+    if _guava15:
+        classpath = _guava15 + _rest
+        log.info("Guava 15.0 поднята в начало classpath: %s", _guava15)
+
     # ── JVM args и tweakers из патчей (в порядке order) ──────────────────
     extra_jvm: list = []
     tweakers:  list = []
