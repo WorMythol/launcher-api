@@ -407,7 +407,7 @@ class MinecraftLauncher:
 
     def _show_main(self):
         self._clear_window()
-        self.root.geometry("700x500")
+        self.root.geometry("700x560")
         self._center()
 
         username = self._user.get("login", "?")
