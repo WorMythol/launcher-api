@@ -6,6 +6,7 @@
 set -euo pipefail
 
 REPO="https://github.com/WorMythol/launcher-api.git"
+REPO_DIR="/opt/launcher-api-repo"
 INSTALL_DIR="/opt/launcher-api"
 SERVICE="launcher-api"
 VENV="$INSTALL_DIR/venv"
@@ -17,32 +18,41 @@ info()  { echo -e "${GREEN}[+]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
 error() { echo -e "${RED}[✗]${NC} $*"; exit 1; }
 
-# ── Права ────────────────────────────────────────────────────────────────────
+# ── Права ─────────────────────────────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
     warn "Запускаю через sudo..."
     exec sudo bash "$0" "$@"
 fi
 
-# ── Зависимости ОС ───────────────────────────────────────────────────────────
+# ── Зависимости ОС ────────────────────────────────────────────────────────────
 info "Проверяю системные зависимости..."
 apt-get update -qq
 apt-get install -y -qq git python3 python3-venv python3-pip curl 2>/dev/null || true
 
-# ── Клонирование / обновление ────────────────────────────────────────────────
-if [[ -d "$INSTALL_DIR/.git" ]]; then
+# ── Клонирование / обновление ─────────────────────────────────────────────────
+if [[ -d "$REPO_DIR/.git" ]]; then
     info "Обновляю репозиторий..."
-    git -C "$INSTALL_DIR" pull --ff-only
+    git -C "$REPO_DIR" pull --ff-only
 else
-    info "Клонирую репозиторий в $INSTALL_DIR..."
-    git clone "$REPO" "$INSTALL_DIR"
+    info "Клонирую репозиторий..."
+    git clone "$REPO" "$REPO_DIR"
 fi
 
-# ── brand.json ───────────────────────────────────────────────────────────────
+# ── Копируем серверные файлы в рабочую директорию ─────────────────────────────
+info "Копирую файлы сервера в $INSTALL_DIR..."
+mkdir -p "$INSTALL_DIR"
+cp -u "$REPO_DIR/server/server.py"               "$INSTALL_DIR/"
+cp -u "$REPO_DIR/server/requirements_server.txt" "$INSTALL_DIR/"
+cp -u "$REPO_DIR/server/launcher-api.service"    "$INSTALL_DIR/"
+# brand.example.json — только если brand.json ещё нет
+[[ ! -f "$INSTALL_DIR/brand.json" ]] && \
+    cp "$REPO_DIR/server/brand.example.json" "$INSTALL_DIR/brand.example.json"
+
+# ── brand.json ────────────────────────────────────────────────────────────────
 BRAND="$INSTALL_DIR/brand.json"
 if [[ ! -f "$BRAND" ]]; then
     warn "Файл brand.json не найден — нужно настроить."
     echo ""
-
     read -rp "  DB URL (postgresql://user:pass@host:port/db): " DB_URL
     read -rp "  IP сервера (например 91.144.171.180):          " SERVER_IP
     read -rp "  Название сервера [My Server]:                  " SERVER_NAME
@@ -74,7 +84,7 @@ else
     info "brand.json уже существует — пропускаю."
 fi
 
-# ── Виртуальное окружение ────────────────────────────────────────────────────
+# ── Виртуальное окружение ─────────────────────────────────────────────────────
 if [[ ! -d "$VENV" ]]; then
     info "Создаю виртуальное окружение..."
     python3 -m venv "$VENV"
@@ -85,9 +95,8 @@ info "Устанавливаю/обновляю Python-зависимости...
 "$PIP" install --quiet -r "$INSTALL_DIR/requirements_server.txt"
 
 # ── systemd-сервис ────────────────────────────────────────────────────────────
-SERVICE_FILE="/etc/systemd/system/$SERVICE.service"
 info "Настраиваю systemd-сервис..."
-cat > "$SERVICE_FILE" <<EOF
+cat > "/etc/systemd/system/$SERVICE.service" <<EOF
 [Unit]
 Description=Minecraft Launcher API
 After=network.target
@@ -125,7 +134,6 @@ if systemctl is-active --quiet "$SERVICE"; then
     echo ""
     echo -e "  Статус:  ${GREEN}$(systemctl is-active $SERVICE)${NC}"
     echo -e "  Логи:    journalctl -u $SERVICE -f"
-    # Быстрая проверка API
     if curl -sf http://localhost:8000/api/news > /dev/null 2>&1; then
         echo -e "  API:     ${GREEN}http://localhost:8000 — отвечает ✓${NC}"
     else
