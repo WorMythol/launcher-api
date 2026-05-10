@@ -372,12 +372,23 @@ def install_dependencies(instance_dir: str, shared_dir: str,
         if on_status:
             on_status(msg)
 
-    # ── Патчи ──────────────────────────────────────────────────────────────
+    # ── Патчи (загружаем все, сортируем по "order" как MultiMC) ───────────
     mc_patch    = _load_json(os.path.join(patches_dir, "net.minecraft.json"))
     forge_patch = _load_json(os.path.join(patches_dir, "net.minecraftforge.json"))
     lwjgl3      = _load_json(os.path.join(patches_dir, "org.lwjgl3.json"))
     fp_patch    = _load_json(os.path.join(patches_dir, "me.eigenraven.lwjgl3ify.forgepatches.json"))
     la_patch    = _load_json(os.path.join(patches_dir, "me.eigenraven.lwjgl3ify.launchargs.json"))
+
+    # Порядок патчей по полю "order" (аналогично MultiMC/Prism):
+    #   net.minecraft       order -2
+    #   org.lwjgl3          order -1
+    #   forgepatches        order  3  ← должен быть ДО Forge!
+    #   net.minecraftforge  order  5
+    #   launchargs          order 100
+    _ordered_patches = sorted(
+        [mc_patch, lwjgl3, fp_patch, forge_patch, la_patch],
+        key=lambda p: p.get("order", 0),
+    )
 
     # ── Minecraft client.jar ───────────────────────────────────────────────
     mc_version   = mc_patch.get("version", "1.7.10")
@@ -393,14 +404,10 @@ def install_dependencies(instance_dir: str, shared_dir: str,
         except KeyError as e:
             raise RuntimeError(f"Не найден ключ в net.minecraft.json: {e}") from e
 
-    # ── Библиотеки ────────────────────────────────────────────────────────
-    all_libs = (
-        mc_patch.get("libraries", [])
-        + forge_patch.get("libraries", [])
-        + lwjgl3.get("libraries", [])
-        + fp_patch.get("libraries", [])
-        + la_patch.get("libraries", [])
-    )
+    # ── Библиотеки (в правильном порядке патчей) ──────────────────────────
+    all_libs: list = []
+    for patch in _ordered_patches:
+        all_libs += patch.get("libraries", [])
 
     total = len(all_libs)
     for i, lib in enumerate(all_libs):
@@ -476,14 +483,16 @@ def build_command(instance_dir: str, shared_dir: str,
     versions_dir = os.path.join(shared_dir, "versions", mc_version)
     mc_jar       = os.path.join(versions_dir, f"{mc_version}.jar")
 
-    # ── Classpath ──────────────────────────────────────────────────────────
-    all_libs = (
-        mc_patch.get("libraries", [])
-        + forge_patch.get("libraries", [])
-        + lwjgl3.get("libraries", [])
-        + fp_patch.get("libraries", [])
-        + la_patch.get("libraries", [])
+    # Порядок патчей по "order" — forgepatches (3) должен быть ДО Forge (5)
+    _ordered_patches = sorted(
+        [mc_patch, lwjgl3, fp_patch, forge_patch, la_patch],
+        key=lambda p: p.get("order", 0),
     )
+
+    # ── Classpath (порядок совпадает с MultiMC/Prism) ──────────────────────
+    all_libs: list = []
+    for patch in _ordered_patches:
+        all_libs += patch.get("libraries", [])
 
     classpath = []
     for lib in all_libs:
@@ -502,11 +511,15 @@ def build_command(instance_dir: str, shared_dir: str,
     if not classpath:
         raise RuntimeError("Classpath пуст — библиотеки не найдены. Запустите установку.")
 
-    # ── JVM args из патчей ────────────────────────────────────────────────
-    extra_jvm  = fp_patch.get("+jvmArgs", [])
+    # ── JVM args и tweakers из патчей (в порядке order) ──────────────────
+    extra_jvm: list = []
+    tweakers:  list = []
+    for patch in _ordered_patches:
+        extra_jvm += patch.get("+jvmArgs", [])
+        tweakers  += patch.get("+tweakers", [])
+
     main_class = la_patch.get("mainClass",
                                "com.gtnewhorizons.retrofuturabootstrap.Main")
-    tweakers   = forge_patch.get("+tweakers", [])
     asset_id   = mc_patch.get("assetIndex", {}).get("id", mc_version)
 
     # ── Сборка команды ────────────────────────────────────────────────────
