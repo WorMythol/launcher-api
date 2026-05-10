@@ -44,6 +44,9 @@ DB_URL         = BRAND.get("db_url", "")
 CLIENT_VERSION = BRAND.get("fixed_version", "1.0.0")
 DOWNLOAD_URL   = BRAND.get("client_download_url", "")
 
+# Папка со статическими файлами (gtnh_libs.zip и др.)
+STATIC_DIR = os.path.join(_HERE, "static")
+
 # Время жизни токена сессии (секунды)
 TOKEN_TTL = 60 * 60 * 24 * 30   # 30 дней
 
@@ -278,6 +281,40 @@ def api_client_download():
     if not DOWNLOAD_URL:
         raise HTTPException(status_code=404, detail="URL скачивания не настроен")
     return RedirectResponse(url=DOWNLOAD_URL)
+
+
+@app.get("/api/downloads/libs")
+def api_libs_download():
+    """
+    Отдаёт gtnh_libs.zip — предварительно скачанный набор библиотек для GT:NH.
+    Положи файл в server/static/gtnh_libs.zip.
+    """
+    from fastapi.responses import FileResponse
+    path = os.path.join(STATIC_DIR, "gtnh_libs.zip")
+    if not os.path.isfile(path):
+        raise HTTPException(
+            status_code=404,
+            detail="gtnh_libs.zip не найден. Положи его в server/static/gtnh_libs.zip"
+        )
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename="gtnh_libs.zip",
+    )
+
+
+@app.get("/api/downloads/libs/version")
+def api_libs_version():
+    """
+    Возвращает версию (дату изменения) gtnh_libs.zip.
+    Лаунчер сравнивает её, чтобы не качать повторно.
+    """
+    path = os.path.join(STATIC_DIR, "gtnh_libs.zip")
+    if not os.path.isfile(path):
+        return {"version": "0"}
+    mtime = int(os.path.getmtime(path))
+    size  = os.path.getsize(path)
+    return {"version": f"{mtime}-{size}"}
 
 
 # ── Точка входа ───────────────────────────────────────────────────────────────

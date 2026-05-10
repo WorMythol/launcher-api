@@ -23,3 +23,10 @@ dist/
 # Иконки и бинари
 *.ico
 *.exe
+
+# Скачанные библиотеки (генерируются через download_libs.py)
+output_libs/
+gtnh_libs.zip
+
+# Настройки лаунчера
+settings.json
